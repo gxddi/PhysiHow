@@ -14,6 +14,7 @@ dist-ssr
 *.local
 data/exercises/
 scraper/
+.cache/
 
 # Editor directories and files
 .vscode/*
