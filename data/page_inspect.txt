@@ -1,0 +1,15 @@
+=== PAGINATION (links with position/page) ===
+
+=== VIDEO OVERLAY DIVS (count: 15) ===
+id=213382944 parent=videoOverDiv
+id=506209632 parent=videoOverDiv
+id=506205988 parent=videoOverDiv
+id=506282126 parent=videoOverDiv
+id=430154881 parent=videoOverDiv
+Vimeo IDs (first 20): 213382944, 506209632, 506205988, 506282126, 430154881, 0
+
+=== TILE: exTd + exEdit + name in onmouseover ===
+Sample onmouseover (first 300 chars): javascript: exOver(157, 'STRAIGHT%20LEG%20RAISE%20-%20SLR\nWhile%20lying%20on%20your%20back%2C%20raise%20up%20your%20leg%20with%20a%20straight%20knee.%20%20Keep%20the%20opposite%20knee%20bent%20with%20the%20foot%20planted%20on%20the%20ground.', 219);
+Total tiles on page: 15
+
+=== PAGINATION ===
