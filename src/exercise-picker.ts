@@ -15,7 +15,7 @@ export function initExercisePicker(
   container.innerHTML = `
     <div class="picker-screen">
       <header class="picker-header">
-        <h1 class="picker-title">PhysiHow</h1>
+        <h1 class="picker-title"><span class="logo-physi">Physi</span><span class="logo-how">How</span></h1>
         <p class="picker-subtitle">Knee & hip osteoarthritis exercises. Choose an exercise — your coach will guide you (source: Uni Melbourne CHESM).</p>
         <input type="search" id="picker-search" class="picker-search" placeholder="Search exercises..." aria-label="Search exercises" />
       </header>

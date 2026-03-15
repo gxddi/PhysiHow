@@ -6,6 +6,7 @@ Env: GEMINI_API_KEY (required for coach). Exercises loaded from data/exercises.j
 """
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
@@ -138,6 +139,54 @@ def coach_chat(request: CoachChatRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logging.exception("Coach chat error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SuggestRequest(BaseModel):
+    exercise_slug: str
+    concern: str
+
+
+class CompileSessionRequest(BaseModel):
+    exercise_name: str
+    transcript: str
+    user_notes: str
+
+
+@app.post("/api/suggest-exercise")
+async def suggest_exercise(req: SuggestRequest):
+    """Railtracks agent: suggest alternative exercises given a concern."""
+    try:
+        from api.agents import suggest_agent
+        import railtracks as rt
+        prompt = (
+            f"Current exercise slug: {req.exercise_slug}\n"
+            f"User concern: {req.concern}"
+        )
+        result = await rt.call(suggest_agent, prompt)
+        return {"suggestions": result.text}
+    except Exception as e:
+        logging.exception("suggest-exercise error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/compile-session")
+async def compile_session(req: CompileSessionRequest):
+    """Railtracks agent: compile session transcript into structured markdown notes."""
+    try:
+        from api.agents import notes_agent
+        import railtracks as rt
+        today = datetime.date.today().isoformat()
+        prompt = (
+            f"Date: {today}\n"
+            f"Exercise: {req.exercise_name}\n\n"
+            f"Session transcript:\n{req.transcript}\n\n"
+            f"Additional user notes:\n{req.user_notes or '(none)'}"
+        )
+        result = await rt.call(notes_agent, prompt)
+        return {"markdown": result.text}
+    except Exception as e:
+        logging.exception("compile-session error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

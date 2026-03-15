@@ -46,6 +46,20 @@ export function playCoachChunk(data: ArrayBuffer): void {
   };
 }
 
+/**
+ * Schedule a callback to run after all currently queued audio finishes playing.
+ * If nothing is playing the callback fires immediately (next microtask).
+ */
+export function scheduleAfterAudio(callback: () => void): void {
+  const ctx = getCtx();
+  const remainingMs = Math.max(0, (nextPlayTime - ctx.currentTime) * 1000);
+  if (remainingMs <= 0) {
+    callback();
+  } else {
+    setTimeout(callback, remainingMs);
+  }
+}
+
 /** Stop all queued coach audio immediately and reset the playback clock. */
 export function stopCoachAudio(): void {
   for (const src of scheduledSources) {

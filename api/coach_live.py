@@ -90,7 +90,9 @@ Your job:
 - Use phrases like "I can see..." only when you have a clear visual basis for the observation. When uncertain, ask the user to describe what they are doing or suggest they reposition the camera.
 - Count reps if applicable.
 - Answer questions about the exercise.
-- Be encouraging and specific, but honest about the limits of what you can observe."""
+- Be encouraging and specific, but honest about the limits of what you can observe.
+- When you instruct the user to hold a position, rest, or time any part of the exercise, first finish explaining what to do, then call start_timer. The session will pause until the timer finishes — after that you will be notified to continue coaching.
+- When the user asks for alternative exercises or raises a concern about the current one, call suggest_exercise with their concern. You will receive a list of alternatives from the exercise library to read out."""
 
 
 async def run_coach_session(websocket: "WebSocket"):
@@ -141,6 +143,37 @@ async def run_coach_session(websocket: "WebSocket"):
         system_instruction=types.Content(role="system", parts=[types.Part(text=system_text)]),
         input_audio_transcription={},
         output_audio_transcription={},
+        tools=[types.Tool(function_declarations=[
+            types.FunctionDeclaration(
+                name="start_timer",
+                description=(
+                    "Start a countdown timer for the user and pause the session until it finishes. "
+                    "Finish speaking before calling this — the session resumes automatically when the timer ends."
+                ),
+                parameters=types.Schema(
+                    type="OBJECT",
+                    properties={
+                        "seconds": types.Schema(type="INTEGER", description="Duration in seconds"),
+                        "label":   types.Schema(type="STRING",  description="Short label shown on screen, e.g. 'Hold stretch'"),
+                    },
+                    required=["seconds"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="suggest_exercise",
+                description=(
+                    "Fetch a list of alternative exercises from the CHESM library that suit the user's concern. "
+                    "Call this when the user asks for alternatives or raises a concern about the current exercise."
+                ),
+                parameters=types.Schema(
+                    type="OBJECT",
+                    properties={
+                        "concern": types.Schema(type="STRING", description="The user's concern or reason for wanting an alternative"),
+                    },
+                    required=["concern"],
+                ),
+            ),
+        ])],
     )
     connection_dead = False
 
@@ -167,6 +200,84 @@ async def run_coach_session(websocket: "WebSocket"):
                     # session.receive() ends after each turn_complete; loop to support multi-turn.
                     while True:
                         async for message in session.receive():
+                            # Tool calls arrive on message.tool_call, separate from server_content
+                            if message.tool_call:
+                                for fc in message.tool_call.function_calls:
+                                    if fc.name == "start_timer":
+                                        seconds = int(fc.args.get("seconds", 30))
+                                        label = str(fc.args.get("label", "Timer"))
+                                        # Tell frontend to start the countdown
+                                        try:
+                                            await websocket.send_json({
+                                                "tool_call": "start_timer",
+                                                "seconds": seconds,
+                                                "label": label,
+                                                "call_id": fc.id,
+                                            })
+                                        except Exception:
+                                            pass
+                                        # Block the session for the timer duration (1s ticks so we can bail early)
+                                        for _ in range(seconds):
+                                            if connection_dead:
+                                                break
+                                            await asyncio.sleep(1)
+                                        # Notify frontend timer is done
+                                        try:
+                                            await websocket.send_json({"timer_complete": True, "label": label})
+                                        except Exception:
+                                            pass
+                                        # Unblock Gemini — it will now resume speaking
+                                        try:
+                                            await session.send_tool_response(function_responses=[
+                                                types.FunctionResponse(
+                                                    id=fc.id,
+                                                    name="start_timer",
+                                                    response={"result": f"Timer '{label}' finished after {seconds} seconds. Continue coaching the user."},
+                                                )
+                                            ])
+                                        except Exception as e:
+                                            logger.debug("send_tool_response start_timer failed: %s", e)
+
+                                    elif fc.name == "suggest_exercise":
+                                        concern = str(fc.args.get("concern", "wants an alternative"))
+                                        # Notify frontend we're consulting the Railtracks agent
+                                        try:
+                                            await websocket.send_json({
+                                                "tool_calling": "suggest_exercise",
+                                                "label": "Consulting exercise library…",
+                                            })
+                                        except Exception:
+                                            pass
+                                        # Call the Railtracks suggest_agent
+                                        suggestions_text = ""
+                                        try:
+                                            from api.agents import suggest_agent
+                                            import railtracks as rt
+                                            prompt = (
+                                                f"Current exercise slug: {exercise_slug or 'unknown'}\n"
+                                                f"User concern: {concern}"
+                                            )
+                                            result = await rt.call(suggest_agent, prompt)
+                                            suggestions_text = result.text
+                                        except Exception as e:
+                                            logger.warning("suggest_exercise Railtracks call failed: %s", e)
+                                            suggestions_text = "Could not retrieve suggestions at this time."
+                                        # Notify frontend agent call is done
+                                        try:
+                                            await websocket.send_json({"tool_done": "suggest_exercise"})
+                                        except Exception:
+                                            pass
+                                        # Return suggestions to Gemini — it will read them out
+                                        try:
+                                            await session.send_tool_response(function_responses=[
+                                                types.FunctionResponse(
+                                                    id=fc.id,
+                                                    name="suggest_exercise",
+                                                    response={"suggestions": suggestions_text},
+                                                )
+                                            ])
+                                        except Exception as e:
+                                            logger.debug("send_tool_response suggest_exercise failed: %s", e)
                             sc = message.server_content
                             if not sc:
                                 continue

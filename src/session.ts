@@ -4,7 +4,7 @@
  */
 import { getExerciseBySlug, type ExerciseDetail } from "./api.js";
 import { startMicStream } from "./coach/audio-in.js";
-import { playCoachChunk, stopCoachAudio } from "./coach/audio-out.js";
+import { playCoachChunk, stopCoachAudio, scheduleAfterAudio } from "./coach/audio-out.js";
 import { setCoachOverlayStatus } from "./coach/view.js";
 
 const VIDEO_BUFFER_FPS = 1;
@@ -80,6 +80,9 @@ export function initSession(mountEl: HTMLElement, exerciseSlug: string, onBack: 
   const STREAM_AUDIO_MS = 200;
   let videoStreamIntervalId: ReturnType<typeof setInterval> | null = null;
   const STREAM_VIDEO_MS = 1500;
+  let timerIntervalId: ReturnType<typeof setInterval> | null = null;
+  let timerSecondsLeft = 0;
+  let timerRunning = false;
 
   function cleanup(): void {
     if (responseDoneTimeoutId) {
@@ -93,6 +96,10 @@ export function initSession(mountEl: HTMLElement, exerciseSlug: string, onBack: 
     if (videoStreamIntervalId) {
       clearInterval(videoStreamIntervalId);
       videoStreamIntervalId = null;
+    }
+    if (timerIntervalId) {
+      clearInterval(timerIntervalId);
+      timerIntervalId = null;
     }
     if (videoIntervalId) {
       clearInterval(videoIntervalId);
@@ -115,6 +122,28 @@ export function initSession(mountEl: HTMLElement, exerciseSlug: string, onBack: 
 
   mountEl.innerHTML = `
     <div class="session-screen">
+      <aside class="tools-panel">
+        <section class="tool-section">
+          <h3 class="tool-section-title">Timer</h3>
+          <div id="timer-display" class="timer-display hidden"></div>
+          <div class="tool-row">
+            <input type="number" id="timer-seconds" class="tool-input" min="5" max="600" value="30" />
+            <span class="tool-unit">sec</span>
+          </div>
+          <button type="button" id="timer-start-btn" class="btn btn-secondary tool-btn">Start</button>
+        </section>
+        <section class="tool-section">
+          <h3 class="tool-section-title">Suggest Alternative</h3>
+          <textarea id="suggest-input" class="tool-textarea" placeholder="Describe your concern…" rows="3"></textarea>
+          <button type="button" id="suggest-btn" class="btn btn-secondary tool-btn">Suggest</button>
+          <div id="suggest-result" class="tool-result hidden"></div>
+        </section>
+        <section class="tool-section">
+          <h3 class="tool-section-title">Session Notes</h3>
+          <textarea id="notes-input" class="tool-textarea" placeholder="Add anything extra…" rows="3"></textarea>
+          <button type="button" id="notes-btn" class="btn btn-secondary tool-btn">Compile &amp; Download</button>
+        </section>
+      </aside>
       <div class="session-camera-wrap">
         <video id="session-video" playsinline muted autoplay></video>
         <canvas id="session-canvas" style="display: none;"></canvas>
@@ -268,6 +297,100 @@ export function initSession(mountEl: HTMLElement, exerciseSlug: string, onBack: 
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
   }
 
+  function startTimer(seconds: number, label: string): void {
+    const display = mountEl.querySelector<HTMLDivElement>("#timer-display");
+    if (!display) return;
+    if (timerIntervalId) clearInterval(timerIntervalId);
+    timerSecondsLeft = seconds;
+    timerRunning = true;
+    display.classList.remove("hidden");
+    display.textContent = `${label}: ${timerSecondsLeft}s`;
+    timerIntervalId = setInterval(() => {
+      timerSecondsLeft--;
+      if (timerSecondsLeft <= 0) {
+        clearInterval(timerIntervalId!);
+        timerIntervalId = null;
+        timerRunning = false;
+        display.textContent = `${label}: Done!`;
+        setTimeout(() => display.classList.add("hidden"), 3000);
+      } else {
+        display.textContent = `${label}: ${timerSecondsLeft}s`;
+      }
+    }, 1000);
+  }
+
+  mountEl.querySelector<HTMLButtonElement>("#timer-start-btn")?.addEventListener("click", () => {
+    const sec = parseInt(mountEl.querySelector<HTMLInputElement>("#timer-seconds")?.value ?? "30", 10);
+    startTimer(isNaN(sec) ? 30 : sec, "Timer");
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ message: `I started a ${sec}-second timer.` }));
+    }
+  });
+
+  mountEl.querySelector<HTMLButtonElement>("#suggest-btn")?.addEventListener("click", async () => {
+    const btn = mountEl.querySelector<HTMLButtonElement>("#suggest-btn")!;
+    const input = mountEl.querySelector<HTMLTextAreaElement>("#suggest-input")!;
+    const resultEl = mountEl.querySelector<HTMLDivElement>("#suggest-result")!;
+    const concern = input.value.trim();
+    if (!concern) return;
+    btn.disabled = true;
+    btn.textContent = "Thinking…";
+    resultEl.classList.add("hidden");
+    try {
+      const res = await fetch("/api/suggest-exercise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ exercise_slug: exerciseSlug, concern }),
+      });
+      const data = await res.json() as { suggestions: string };
+      resultEl.textContent = data.suggestions;
+      resultEl.classList.remove("hidden");
+    } catch {
+      resultEl.textContent = "Failed to fetch suggestions.";
+      resultEl.classList.remove("hidden");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Suggest";
+    }
+  });
+
+  mountEl.querySelector<HTMLButtonElement>("#notes-btn")?.addEventListener("click", async () => {
+    const btn = mountEl.querySelector<HTMLButtonElement>("#notes-btn")!;
+    const notesInput = mountEl.querySelector<HTMLTextAreaElement>("#notes-input")!;
+    btn.disabled = true;
+    btn.textContent = "Compiling…";
+    const bubbles = Array.from(transcriptEl?.querySelectorAll(".chat-turn") ?? []).map((el) => {
+      const label = el.querySelector(".chat-turn-label")?.textContent ?? "";
+      const text = el.querySelector(".chat-turn-text")?.textContent ?? "";
+      return `${label}: ${text}`;
+    });
+    const transcript = bubbles.join("\n");
+    try {
+      const res = await fetch("/api/compile-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          exercise_name: nameEl?.textContent ?? exerciseSlug,
+          transcript,
+          user_notes: notesInput.value.trim(),
+        }),
+      });
+      const data = await res.json() as { markdown: string };
+      const blob = new Blob([data.markdown], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `session-notes-${exerciseSlug}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("Failed to compile session notes.");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Compile & Download";
+    }
+  });
+
   getExerciseBySlug(exerciseSlug)
     .then((ex: ExerciseDetail) => {
       if (nameEl) nameEl.textContent = ex.name;
@@ -359,8 +482,8 @@ export function initSession(mountEl: HTMLElement, exerciseSlug: string, onBack: 
       // Paused while coachGenerating to avoid triggering Gemini VAD and interrupting its response.
       streamAudioIntervalId = setInterval(() => {
         if (!ws || ws.readyState !== WebSocket.OPEN || streamAudioBuffer.length === 0) return;
-        if (coachGenerating) {
-          // Discard so stale silence doesn't flood Gemini the moment the model finishes
+        if (coachGenerating || timerRunning) {
+          // Discard so stale silence doesn't flood Gemini the moment the model finishes or timer ends
           streamAudioBuffer.length = 0;
           return;
         }
@@ -386,7 +509,7 @@ export function initSession(mountEl: HTMLElement, exerciseSlug: string, onBack: 
       // Paused while coachGenerating to avoid flooding the model while it is responding.
       videoStreamIntervalId = setInterval(() => {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        if (coachGenerating) return;
+        if (coachGenerating || timerRunning) return;
         if (videoFrameBuffer.length === 0) return;
         const frame = videoFrameBuffer[videoFrameBuffer.length - 1];
         try {
@@ -487,6 +610,28 @@ export function initSession(mountEl: HTMLElement, exerciseSlug: string, onBack: 
             currentModelText = "";
             coachGenerating = false;
             setCoachOverlayStatus("Ready", "ready");
+          }
+          // Timer tool call forwarded from backend — wait for any in-flight audio to finish
+          // before starting the visible countdown so the timer never overlaps the coach's voice.
+          if (obj.tool_call === "start_timer") {
+            const secs = obj.seconds ?? 30;
+            const lbl  = obj.label  ?? "Timer";
+            scheduleAfterAudio(() => startTimer(secs, lbl));
+          }
+          // Backend finished waiting for the timer; coach is about to resume
+          if (obj.timer_complete) {
+            timerRunning = false;
+            // The frontend countdown shows "Done!" on its own; nothing extra needed
+          }
+          // Backend is calling a Railtracks agent on behalf of the coach
+          if (obj.tool_calling === "suggest_exercise") {
+            coachGenerating = true;
+            setCoachOverlayStatus(obj.label ?? "Consulting exercise library…", "speaking");
+          }
+          // Railtracks agent call finished; coach is about to receive and speak the result
+          if (obj.tool_done === "suggest_exercise") {
+            // coachGenerating stays true — it will clear when the model finishes its next turn
+            setCoachOverlayStatus("Coach is responding…", "speaking");
           }
           // interrupted: model was cut off — stop audio and reset state
           if (obj.interrupted) {
