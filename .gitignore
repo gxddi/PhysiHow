@@ -9,10 +9,14 @@ lerna-debug.log*
 
 node_modules
 .venv
+.env
 dist
 dist-ssr
 *.local
 data/exercises/
+data/extraction-report.json
+data/inspect_next.txt
+data/*_inspect.txt
 scraper/
 .cache/
 

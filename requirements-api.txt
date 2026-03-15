@@ -1,0 +1,5 @@
+# API server for exercise matching + LLM coach (run from repo root)
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+google-genai>=1.0.0
+python-dotenv>=1.0.0
