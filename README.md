@@ -7,6 +7,7 @@ Pick a physiotherapy exercise from the **University of Melbourne CHESM video lib
 ## Quick start (from repo root)
 
 ```bash
+(Start virtual environment)
 # 1. Backend
 pip install -r requirements-api.txt
 # Set GEMINI_API_KEY in a .env file (copy .env.example)
